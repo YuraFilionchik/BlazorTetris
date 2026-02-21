@@ -1,33 +1,162 @@
-@inherits BlazorApp.Components.GameFieldModel
+@using BlazorApp.Components
+@using BlazorApp.Data
+@using Microsoft.AspNetCore.Components.Web
+@inject LeaderboardService Leaderboard
+@inject IJSRuntime JS
+@implements IDisposable
 
+<div class="tetris-wrapper" @ref="gameContainer" tabindex="0" @onkeydown="HandleKeyDown" @onkeydown:preventDefault>
 
-<div id="tetris" class="tetris">
-  <div id="tetrisleft">
-   <div id="tetriscanvas" style="width:@(Size.Width+"px"); height:@(Size.Height+"px")">
-       
-       @foreach (CellComponentmodel cell in Cells)
-       {
-           <CellComponent CellSize="@cell.CellSize" 
-                          CellColor="@cell.CellColor"
-                          PosInField="@cell.PosInField"
-                          Empty="@cell.Empty"/>
-       }
-   </div>
-  </div>
-  <div id="tetrisright">
-   <div align="center"><b>T E T R I S</b></div>
-      <p class="info">&harr;: move left/right;
-          <br>&uarr;: rotate;
-          <br>&darr; or _: drop;
-          <br>Esc: pause
-      </p>
-      <div class="buttons">
-          <button @onclick="StartGame">Start</button>
-          <button @onclick="StopGame">Stop</button>
-      </div>
-   <canvas id="figurecanvas" width="120" height="120"></canvas>
-   <p class="info" id="tetriscount"></p>
-  </div>
-  <div class="clear"></div>
- </div>
+    @if (game.State == GameState.Menu)
+    {
+        <div class="menu-overlay">
+            <div class="menu-panel">
+                <h1 class="game-title">TETRIS</h1>
+                <p class="subtitle">Blazor Edition</p>
+                <button class="btn-neon btn-start" @onclick="StartGame">▶ START GAME</button>
+                @if (leaderboardEntries.Count > 0)
+                {
+                    <div class="leaderboard-section">
+                        <h3>🏆 TOP SCORES</h3>
+                        <div class="leaderboard-list">
+                            @for (int i = 0; i < leaderboardEntries.Count; i++)
+                            {
+                                var entry = leaderboardEntries[i];
+                                <div class="lb-row">
+                                    <span class="lb-rank">#@(i + 1)</span>
+                                    <span class="lb-name">@entry.Name</span>
+                                    <span class="lb-score">@entry.Score.ToString("N0")</span>
+                                    <span class="lb-level">Lv.@entry.Level</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
 
+    <div class="game-layout">
+        <div class="side-panel left-panel">
+            <div class="panel-block">
+                <div class="panel-label">SCORE</div>
+                <div class="panel-value score-value">@game.Score.ToString("N0")</div>
+            </div>
+            <div class="panel-block">
+                <div class="panel-label">LEVEL</div>
+                <div class="panel-value">@game.Level</div>
+            </div>
+            <div class="panel-block">
+                <div class="panel-label">LINES</div>
+                <div class="panel-value">@game.LinesCleared</div>
+            </div>
+            <div class="panel-block">
+                <div class="panel-label">SPEED</div>
+                <div class="panel-value speed-value">@game.GetDropInterval() ms</div>
+                <div class="speed-controls">
+                    <button class="btn-speed" @onclick="SpeedDown" title="Slower">−</button>
+                    <button class="btn-speed" @onclick="SpeedUp" title="Faster">+</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="board-container">
+            <div class="board-frame">
+                <div class="board-grid" id="tetris-board">
+                    @for (int r = 0; r < TetrisGame.Rows; r++)
+                    {
+                        int row = r;
+                        bool isClearing = game.ClearingRows.Contains(row);
+                        @for (int c = 0; c < TetrisGame.Cols; c++)
+                        {
+                            int col = c;
+                            int cellType = game.GetCellType(row, col);
+                            bool isGhost = cellType < 0;
+                            int absType = Math.Abs(cellType);
+                            bool isLocked = game.JustLocked && game.LockedCells.Contains(row * TetrisGame.Cols + col);
+                            string cls = "cell";
+                            if (absType > 0) cls += " cell-type-" + absType;
+                            if (isGhost) cls += " cell-ghost";
+                            if (isClearing) cls += " cell-clearing";
+                            if (isLocked && !isClearing) cls += " cell-locked";
+                            <div class="@cls"></div>
+                        }
+                    }
+                </div>
+            </div>
+
+            @if (game.State == GameState.Paused)
+            {
+                <div class="pause-overlay">
+                    <div class="pause-text">PAUSED</div>
+                    <button class="btn-neon" @onclick="ResumeGame">▶ RESUME</button>
+                </div>
+            }
+
+            @if (game.State == GameState.GameOver)
+            {
+                <div class="gameover-overlay">
+                    <div class="gameover-text">GAME OVER</div>
+                    <div class="final-score">Score: @game.Score.ToString("N0")</div>
+                    <div class="name-input-group">
+                        <input class="name-input" @bind="playerName" @bind:event="oninput"
+                               placeholder="Your name" maxlength="20" />
+                        <button class="btn-neon btn-save" @onclick="SaveScore"
+                                disabled="@string.IsNullOrWhiteSpace(playerName)">💾 SAVE</button>
+                    </div>
+                    <button class="btn-neon btn-restart" @onclick="StartGame">🔄 PLAY AGAIN</button>
+                </div>
+            }
+        </div>
+
+        <div class="side-panel right-panel">
+            <div class="panel-block">
+                <div class="panel-label">NEXT</div>
+                <div class="next-preview">
+                    @{
+                        var nextShape = GetNextShape();
+                        if (nextShape != null)
+                        {
+                            int nRows = nextShape.GetLength(0);
+                            int nCols = nextShape.GetLength(1);
+                            <div class="next-grid" style="grid-template-columns: repeat(@nCols, 1fr); grid-template-rows: repeat(@nRows, 1fr);">
+                                @for (int r = 0; r < nRows; r++)
+                                {
+                                    @for (int c2 = 0; c2 < nCols; c2++)
+                                    {
+                                        string ncls = nextShape[r, c2] != 0 ? "cell cell-type-" + game.NextPieceType : "cell";
+                                        <div class="@ncls"></div>
+                                    }
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+            <div class="panel-block controls-info">
+                <div class="panel-label">CONTROLS</div>
+                <div class="control-row"><span class="key">←→</span> Move</div>
+                <div class="control-row"><span class="key">↑</span> Rotate</div>
+                <div class="control-row"><span class="key">↓</span> Soft drop</div>
+                <div class="control-row"><span class="key">Space</span> Hard drop</div>
+                <div class="control-row"><span class="key">Esc</span> Pause</div>
+            </div>
+            <div class="panel-block">
+                <div class="game-buttons">
+                    @if (game.State == GameState.Playing)
+                    {
+                        <button class="btn-neon btn-sm" @onclick="PauseGame">⏸ Pause</button>
+                    }
+                    @if (game.State == GameState.Paused)
+                    {
+                        <button class="btn-neon btn-sm" @onclick="ResumeGame">▶ Resume</button>
+                    }
+                    @if (game.State == GameState.Playing || game.State == GameState.Paused)
+                    {
+                        <button class="btn-neon btn-sm btn-danger" @onclick="EndGame">⏹ End</button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

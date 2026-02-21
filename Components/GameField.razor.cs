@@ -1,211 +1,275 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
-using System.Timers;
+using BlazorApp.Data;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
+using Microsoft.JSInterop;
 
 namespace BlazorApp.Components
 {
-    public class GameFieldModel : ComponentBase
+    public partial class GameField : IDisposable
     {
-        public int Col_count = 10;
-        public int Row_count = 20;
-        public Color DefaultColor = Color.Transparent; //empty cell
-        [Parameter]
-        public Size Size { get; set; } //size of game field
-        public CellComponentmodel[,] Cells; //конечный вариант поля для отрисовки
-        public CellComponentmodel[,] StaticCells; //неподвижное поле с уже лежащими фигурами
-        public Timer timer;
-        private FigureBuilder builder;
-        public iFigure CurrentFigure;
-        public iFigure NextFigure;
-        
-        public int CellSize { get
-            {
-                return (int)((Size.Height) / Row_count);
-            } }
+        private TetrisGame game = new TetrisGame();
+        private Timer? gameTimer;
+        private Timer? clearTimer;
+        private string playerName = "";
+        private List<ScoreEntry> leaderboardEntries = new List<ScoreEntry>();
+        private ElementReference gameContainer;
+        private bool disposed = false;
+
+        private static readonly int[,][] ShapeCache = BuildShapeCache();
 
         protected override void OnInitialized()
         {
-            
-            
-        }
-public static GameFieldModel Game ;
-        public GameFieldModel()
-        {
-            Game=this;
-            if (Size.Height == 0 || Size.Width == 0) Size = new Size { Height = 600, Width = 300 };
-            Cells = new CellComponentmodel[Row_count, Col_count];
-            builder=new FigureBuilder(CellSize);
-            GenerateField();
-            StaticCells = GameFieldModel.CopyField(Cells);
-            timer = new Timer(1000);
-            timer.Elapsed += Timer_Elapsed;
+            leaderboardEntries = Leaderboard.GetTopScores();
         }
 
-        private void Timer_Elapsed(object sender, ElapsedEventArgs e)
+        protected override async Task OnAfterRenderAsync(bool firstRender)
         {
-            FreeFall(CurrentFigure);
-            StateHasChanged();
+            if (firstRender)
+            {
+                await FocusGame();
+            }
         }
-        public void DrawFigure(iFigure figure)
-        {
 
-        }
-        /// <summary>
-        /// true - success
-        /// false - end game
-        /// </summary>
-        /// <param name="figure"></param>
-        /// <returns></returns>
-        public bool FreeFall(iFigure figure)
+        private async Task FocusGame()
         {
-            var movedFig = CurrentFigure.Move(0, 1);
-            if (IsFigureInButtom(movedFig) || IsCollisionOldCells(movedFig,StaticCells))//on floor
+            try
             {
-                StaticCells = AttemptFigure(CurrentFigure.Cells, StaticCells); //объединение фигуры и поля
-                CurrentFigure = NextFigure;
-                NextFigure = builder.BuildRandom();
-                Cells = AttemptFigure(CurrentFigure.Cells, StaticCells);
-                if (IsCollisionOldCells(CurrentFigure.Cells, StaticCells)) {
-                    timer.Stop();
-                    return false; //Game over
-}
-                
+                await JS.InvokeVoidAsync("tetrisFocus", gameContainer);
             }
-            else
-            {
-                CurrentFigure.Cells = movedFig;//отображаем сдвинутую фигуру
-                Cells = AttemptFigure(CurrentFigure.Cells, StaticCells);
-            }
-            return true;
+            catch { }
         }
-        public void GenerateField()
+
+        private void StartGame()
         {
-            for (int row = 0; row < Row_count; row++)
+            StopTimers();
+            game = new TetrisGame();
+            game.Level = 1;
+            game.StartGame();
+            playerName = "";
+
+            int interval = game.GetDropInterval();
+            gameTimer = new Timer(OnTick, null, interval, interval);
+            _ = FocusGame();
+        }
+
+        private void PauseGame()
+        {
+            if (game.State != GameState.Playing) return;
+            game.State = GameState.Paused;
+            StopTimers();
+        }
+
+        private void ResumeGame()
+        {
+            if (game.State != GameState.Paused) return;
+            game.State = GameState.Playing;
+            int interval = game.GetDropInterval();
+            gameTimer = new Timer(OnTick, null, interval, interval);
+            _ = FocusGame();
+        }
+
+        private void EndGame()
+        {
+            StopTimers();
+            game.State = GameState.GameOver;
+        }
+
+        private void OnTick(object? state)
+        {
+            if (game.State != GameState.Playing || game.IsClearing) return;
+
+            InvokeAsync(() =>
             {
-                for (int column = 0; column < Col_count; column++)
+                game.Tick();
+
+                if (game.IsClearing)
                 {
+                    StateHasChanged();
+                    clearTimer = new Timer(OnClearComplete, null, 500, Timeout.Infinite);
+                    return;
+                }
 
-                    Cells[row, column] = new CellComponent();
-                    var cell = Cells[row, column];
-                    cell.SetColor(DefaultColor);
-                    cell.SetEmpty(true);
-                    cell.SetCellSize(CellSize);
-                    cell.SetPosInField(new Point { Y = row, X = column });
-                    //cell.SetPositionABS();
+                if (game.JustLocked)
+                {
+                    StateHasChanged();
+                    Task.Delay(150).ContinueWith(_ =>
+                    {
+                        InvokeAsync(() =>
+                        {
+                            game.JustLocked = false;
+                            StateHasChanged();
+                        });
+                    });
+                }
+                else
+                {
+                    StateHasChanged();
+                }
+
+                if (game.State == GameState.GameOver)
+                {
+                    StopTimers();
+                    leaderboardEntries = Leaderboard.GetTopScores();
+                    StateHasChanged();
+                }
+
+                UpdateTimerInterval();
+            });
+        }
+
+        private void OnClearComplete(object? state)
+        {
+            InvokeAsync(() =>
+            {
+                game.FinishClearing();
+                game.JustLocked = false;
+
+                if (game.State == GameState.GameOver)
+                {
+                    StopTimers();
+                    leaderboardEntries = Leaderboard.GetTopScores();
+                }
+
+                StateHasChanged();
+                UpdateTimerInterval();
+            });
+        }
+
+        private void UpdateTimerInterval()
+        {
+            if (gameTimer != null && game.State == GameState.Playing)
+            {
+                int interval = game.GetDropInterval();
+                try
+                {
+                    gameTimer.Change(interval, interval);
+                }
+                catch { }
+            }
+        }
+
+        private void HandleKeyDown(KeyboardEventArgs e)
+        {
+            if (game.State == GameState.Playing && !game.IsClearing)
+            {
+                switch (e.Key)
+                {
+                    case "ArrowLeft":
+                        game.MoveLeft();
+                        break;
+                    case "ArrowRight":
+                        game.MoveRight();
+                        break;
+                    case "ArrowDown":
+                        game.SoftDrop();
+                        break;
+                    case "ArrowUp":
+                        game.Rotate();
+                        break;
+                    case " ":
+                        game.HardDrop();
+                        if (game.IsClearing)
+                        {
+                            clearTimer = new Timer(OnClearComplete, null, 500, Timeout.Infinite);
+                        }
+                        else if (game.State == GameState.GameOver)
+                        {
+                            StopTimers();
+                            leaderboardEntries = Leaderboard.GetTopScores();
+                        }
+                        break;
+                }
+                StateHasChanged();
+
+                if (game.JustLocked && !game.IsClearing)
+                {
+                    Task.Delay(150).ContinueWith(_ =>
+                    {
+                        InvokeAsync(() =>
+                        {
+                            game.JustLocked = false;
+                            StateHasChanged();
+                        });
+                    });
                 }
             }
-        }
-
-        public void ClearField()
-        {
-            for(int row=0; row<Row_count;row++)
+            else if (game.State == GameState.Paused && e.Key == "Escape")
             {
-                for(int column=0; column<Col_count;column++)
-                {
-                    Cells[row, column].SetColor(DefaultColor);
-                    Cells[row, column].SetEmpty(true);
-                }
+                ResumeGame();
+                StateHasChanged();
+            }
+            else if (game.State == GameState.Playing && e.Key == "Escape")
+            {
+                PauseGame();
+                StateHasChanged();
             }
         }
 
-        public void StopGame()
+        private void SpeedUp()
         {
-            //timer.Stop();
-            FreeFall(CurrentFigure);
-        }
-        public void StartGame()
-        {
-            ClearField();
-            NextFigure = builder.BuildRandom();
-            CurrentFigure = builder.BuildRandom();
-            Cells = AttemptFigure(CurrentFigure.Cells, StaticCells);
-            StateHasChanged();
-           // timer.Start();
+            if (game.Level < 15) game.Level++;
+            UpdateTimerInterval();
+            _ = FocusGame();
         }
 
-        /// <summary>
-        /// add figure.cells to field
-        /// </summary>
-        /// <param name="cells"></param>
-        /// <param name="statFielCells"></param>
-        /// <returns></returns>
-        private CellComponentmodel[,] AttemptFigure(CellComponentmodel[] cells, CellComponentmodel[,] statFielCells)
+        private void SpeedDown()
         {
-            CellComponentmodel[,] newField = GameField.CopyField(statFielCells);
-            foreach (CellComponentmodel cell in cells)
+            if (game.Level > 1) game.Level--;
+            UpdateTimerInterval();
+            _ = FocusGame();
+        }
+
+        private void SaveScore()
+        {
+            if (!string.IsNullOrWhiteSpace(playerName) && game.Score > 0)
             {
-                newField[cell.PosInField.Y, cell.PosInField.X] = cell;
+                Leaderboard.AddScore(playerName, game.Score, game.Level, game.LinesCleared);
+                leaderboardEntries = Leaderboard.GetTopScores();
             }
-
-            return newField;
         }
 
-        public static CellComponentmodel[] FillCells(CellComponentmodel[] cells, Color color)
+        private int[,]? GetNextShape()
         {
-            for(int i=0; i<cells.Count();i++)
+            if (game.NextPieceType < 1 || game.NextPieceType > 7) return null;
+            return GetShapeForType(game.NextPieceType);
+        }
+
+        private static int[,] GetShapeForType(int type)
+        {
+            return type switch
             {
-                cells[i].SetColor(color);
-                cells[i].SetEmpty(false);
-            }
-            return cells;
-        }
-        public static CellComponentmodel[] CreateCells(int count,int cellSize)
-        {
-            CellComponentmodel[] cells = new CellComponentmodel[count];
-            for (int i = 0; i < count; i++)
-            {
-                cells[i] = new CellComponentmodel();
-                cells[i].SetCellSize(cellSize);
-            }
-            return cells;
+                1 => new int[,] { {0,0,0,0}, {1,1,1,1}, {0,0,0,0}, {0,0,0,0} },
+                2 => new int[,] { {1,1}, {1,1} },
+                3 => new int[,] { {0,1,0}, {1,1,1}, {0,0,0} },
+                4 => new int[,] { {0,1,1}, {1,1,0}, {0,0,0} },
+                5 => new int[,] { {1,1,0}, {0,1,1}, {0,0,0} },
+                6 => new int[,] { {1,0,0}, {1,1,1}, {0,0,0} },
+                7 => new int[,] { {0,0,1}, {1,1,1}, {0,0,0} },
+                _ => new int[,] { {0} },
+            };
         }
 
-        public static CellComponentmodel[,] CopyField(CellComponentmodel[,] cells)
+        private static int[,][] BuildShapeCache()
         {
-            var rows = cells.GetUpperBound(0)+1;
-            if (rows == 0) return new CellComponentmodel[0, 0];
-            var columns = cells.Length / rows;
-            CellComponentmodel[,] newCells = new CellComponentmodel[rows, columns];
-            for (int i = 0; i < rows; i++)
-            {
-                for (int j = 0; j < columns; j++)
-                {
-                    newCells[i,j] = CellComponentmodel.CopyCell(cells[i,j]);
-                }
-            }
-            return newCells;
+            return new int[,][] { };
         }
 
-        public bool IsCollisionBorder(CellComponentmodel[] fig)
+        private void StopTimers()
         {
-            //check out of field
-            return fig.Any(x => x.PosInField.X < 0 ||
-                                x.PosInField.Y < 0 ||
-                                x.PosInField.X > Col_count - 1 ||
-                                x.PosInField.Y > Row_count - 1);
-        }
-        public bool IsFigureInButtom(CellComponentmodel[] fig)
-        {
-            return fig.Any(x => x.PosInField.Y > Row_count - 1);
-        }
-        public bool IsCollisionOldCells(CellComponentmodel[] fig, CellComponentmodel[,] staticfield)
-        {
-            var rows = staticfield.GetUpperBound(0);
-            var columns = staticfield.Length / rows;
-           
-            //check collision with static cells
-            foreach (CellComponentmodel cell in staticfield)
-            {
-                if (cell.Empty) continue;
-                if (fig.Any(x => x.PosInField == cell.PosInField)) return true;
-            }
-
-            return false;
+            gameTimer?.Dispose();
+            gameTimer = null;
+            clearTimer?.Dispose();
+            clearTimer = null;
         }
 
+        public void Dispose()
+        {
+            disposed = true;
+            StopTimers();
+        }
     }
 }
