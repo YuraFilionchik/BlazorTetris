@@ -1,3 +1,5 @@
+[Live demo — http://tetr.runasp.net/](http://tetr.runasp.net/)
+
 # Blazor Tetris
 
 A Tetris-style game built with Blazor and .NET 9. This repository contains a single-page web application implemented with Blazor components demonstrating interactive UI, game logic, and component-driven design.
@@ -73,3 +75,7 @@ Contributions are welcome. Open an issue or submit a pull request with descripti
 ## License
 
 Include an appropriate license file if you want this project to be open source. If none is provided, the default is that the repository is not licensed for reuse.
+
+---
+
+This README describes the project, its features, and how to run it. Replace or extend screenshots and the notes section as needed to tailor the presentation.

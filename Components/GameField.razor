@@ -5,7 +5,7 @@
 @inject IJSRuntime JS
 @implements IDisposable
 
-<div class="tetris-wrapper" @ref="gameContainer" tabindex="0" @onkeydown="HandleKeyDown" @onkeydown:preventDefault>
+<div class="tetris-wrapper" @ref="gameContainer" tabindex="0" @onkeydown="HandleKeyDown" @onkeydown:preventDefault="@PreventKeyDefault">
 
     @if (game.State == GameState.Menu)
     {
@@ -100,8 +100,8 @@
                     <div class="final-score">Score: @game.Score.ToString("N0")</div>
                     <div class="name-input-group">
                         <input class="name-input" @bind="playerName" @bind:event="oninput"
-                               placeholder="Your name" maxlength="20" />
-                        <button class="btn-neon btn-save" @onclick="SaveScore"
+                               placeholder="Your name" maxlength="20" @ref="nameInputRef" />
+                        <button type="button" class="btn-neon btn-save" @onclick="SaveScore"
                                 disabled="@string.IsNullOrWhiteSpace(playerName)">💾 SAVE</button>
                     </div>
                     <button class="btn-neon btn-restart" @onclick="StartGame">🔄 PLAY AGAIN</button>

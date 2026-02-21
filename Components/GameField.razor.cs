@@ -11,6 +11,12 @@ namespace BlazorApp.Components
 {
     public partial class GameField : IDisposable
     {
+        [Inject]
+        private NavigationManager Navigation { get; set; } = default!;
+
+        // Navigation is not required: switching game.State to Menu and calling StateHasChanged
+        // shows the start/menu view with the leaderboard.
+
         private TetrisGame game = new TetrisGame();
         private Timer? gameTimer;
         private Timer? clearTimer;
@@ -18,6 +24,14 @@ namespace BlazorApp.Components
         private List<ScoreEntry> leaderboardEntries = new List<ScoreEntry>();
         private ElementReference gameContainer;
         private bool disposed = false;
+        private ElementReference nameInputRef;
+
+        // When true, keydown default behavior is prevented on the game container.
+        // We only want to prevent default while the game is active (playing or paused).
+        private bool PreventKeyDefault => game.State == GameState.Playing || game.State == GameState.Paused;
+
+        // Indicates that score was saved, used to show feedback in UI
+        private bool saved = false;
 
         private static readonly int[,][] ShapeCache = BuildShapeCache();
 
@@ -50,6 +64,7 @@ namespace BlazorApp.Components
             game.Level = 1;
             game.StartGame();
             playerName = "";
+            saved = false;
 
             int interval = game.GetDropInterval();
             gameTimer = new Timer(OnTick, null, interval, interval);
@@ -225,10 +240,24 @@ namespace BlazorApp.Components
 
         private void SaveScore()
         {
-            if (!string.IsNullOrWhiteSpace(playerName) && game.Score > 0)
+            if (!string.IsNullOrWhiteSpace(playerName))
             {
+                // Allow saving even if score is zero; user provided a name.
                 Leaderboard.AddScore(playerName, game.Score, game.Level, game.LinesCleared);
                 leaderboardEntries = Leaderboard.GetTopScores();
+                saved = true;
+
+                // Return to menu (start screen) so leaderboard is visible and clear name.
+                game.State = GameState.Menu;
+                playerName = string.Empty;
+
+                // Focus the game container (menu) back.
+                _ = FocusGame();
+
+                Navigation.NavigateTo("/");
+
+                // Refresh UI
+                StateHasChanged();
             }
         }
 
