@@ -1,4 +1,4 @@
-[Live demo — http://tetr.runasp.net/](http://tetr.runasp.net/)
+[Live demo â€” http://tetr.runasp.net](http://tetr.runasp.net)
 
 # Blazor Tetris
 
@@ -57,9 +57,9 @@ Alternatively, open the solution in Visual Studio (2022/2024 with .NET 9 support
 
 ## Project structure (important files)
 
-- `BlazorApp.csproj` — project file targeting `net9.0`.
-- `Pages/Index.razor` and `Pages/Index.razor.cs` — main page and backing logic.
-- `Components/GameField.razor` and `Components/GameField.razor.cs` — game field rendering and game logic.
+- `BlazorApp.csproj` â€” project file targeting `net9.0`.
+- `Pages/Index.razor` and `Pages/Index.razor.cs` â€” main page and backing logic.
+- `Components/GameField.razor` and `Components/GameField.razor.cs` â€” game field rendering and game logic.
 
 ## Notes / talking points
 
